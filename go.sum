@@ -1,5 +1,7 @@
 github.com/Meduzz/helper v0.0.0-20220827112809-0ba7c4859323 h1:AxA46DA81fJVm0MlX9U6yW1lYwKf009ocs0z3Gs5EKc=
 github.com/Meduzz/helper v0.0.0-20220827112809-0ba7c4859323/go.mod h1:CbRBCgC6P6OD7DELklSuxfrPOpJ372ZakABPFAu++ws=
+github.com/aymerick/raymond v2.0.2+incompatible h1:VEp3GpgdAnv9B2GFyTvqgcKvY+mfKMjPOA3SbKLtnU0=
+github.com/aymerick/raymond v2.0.2+incompatible/go.mod h1:osfaiScAUVup+UC9Nfq76eWqDhXlp+4UYaA8uhTBO6g=
 github.com/cpuguy83/go-md2man/v2 v2.0.2/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=
 github.com/inconshreveable/mousetrap v1.0.0 h1:Z8tu5sraLXCXIcARxBp/8cbvlwVa7Z1NHg9XEKhtSvM=
 github.com/inconshreveable/mousetrap v1.0.0/go.mod h1:PxqpIevigyE2G7u3NXJIT2ANytuPF1OarO4DADm73n8=

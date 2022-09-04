@@ -42,7 +42,7 @@ type (
 func handleTest(cmd *cobra.Command, args []string) error {
 	infile := args[0]
 
-	tests, err := readAndParseInFile(infile)
+	result, err := readAndParseInFile(infile)
 
 	if err != nil {
 		return err
@@ -52,7 +52,7 @@ func handleTest(cmd *cobra.Command, args []string) error {
 
 	actual := make([]*parser.Response, 0)
 
-	for _, test := range tests {
+	for _, test := range result.Tests {
 		switch test.Method {
 		case post:
 			res, err := doPost(test)
@@ -94,14 +94,14 @@ func handleTest(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	facits, err := parser.ParseFacit(bs)
+	result, err = parser.ParseFacit(bs, result)
 
 	if err != nil {
 		return err
 	}
 
 	for _, res := range actual {
-		facit := findResponseByName(res.Name, facits)
+		facit := findResponseByName(res.Name, result.Facit)
 
 		if facit != nil {
 			diff := compareResponses(facit, res)
@@ -131,7 +131,7 @@ func handleTest(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func readAndParseInFile(name string) ([]*parser.Test, error) {
+func readAndParseInFile(name string) (*parser.ParseResult, error) {
 	bs, err := os.ReadFile(name)
 
 	if err != nil {

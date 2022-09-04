@@ -5,16 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-)
 
-type (
-	Test struct {
-		Name    string
-		Method  string
-		Path    string
-		Headers map[string]string
-		Body    string
-	}
+	"github.com/aymerick/raymond"
 )
 
 const (
@@ -33,7 +25,11 @@ const (
 )
 
 // ParseSource parse a source file (.http|.rest) returning any requests found or an error
-func ParseSource(bs []byte) ([]*Test, error) {
+func ParseSource(bs []byte) (*ParseResult, error) {
+	result := &ParseResult{}
+	variables := make(map[string]interface{})
+	result.Variables = variables
+
 	rows := toRows(bs)
 
 	position := name
@@ -43,8 +39,20 @@ func ParseSource(bs []byte) ([]*Test, error) {
 	}
 
 	for _, row := range rows {
+		// divider and request naming
 		if strings.HasPrefix(row, "#") {
 			if position == body {
+				if test.Body != "" {
+					// do body templating
+					body, err := raymond.Render(test.Body, variables)
+
+					if err != nil {
+						return nil, err
+					}
+
+					test.Body = body
+				}
+
 				tests = append(tests, test)
 				test = &Test{
 					Headers: make(map[string]string),
@@ -59,26 +67,56 @@ func ParseSource(bs []byte) ([]*Test, error) {
 			}
 		}
 
+		// request stuff
 		if !strings.HasPrefix(row, "#") {
+			// file variable
+			if strings.HasPrefix(row, "@") {
+				v := strings.SplitN(row, "=", 2)
+				key := strings.TrimSpace(v[0][1:])
+				value := strings.TrimSpace(v[1])
+
+				variables[key] = value
+				continue
+			}
+
+			// request line
 			if position == method {
 				methodPath := strings.SplitN(row, " ", 2)
 				test.Method = methodPath[0]
 				position++
-				test.Path = methodPath[1]
+
+				// do path templating
+				path, err := raymond.Render(methodPath[1], variables)
+
+				if err != nil {
+					return nil, err
+				}
+
+				test.Path = path
 				position++
 				continue
 			}
 
+			// headers
 			if position == headers {
 				if row != "" {
 					headerSplit := strings.SplitN(row, ":", 2)
-					test.Headers[headerSplit[0]] = strings.TrimSpace(headerSplit[1])
+
+					// do header templating
+					value, err := raymond.Render(strings.TrimSpace(headerSplit[1]), variables)
+
+					if err != nil {
+						return nil, err
+					}
+
+					test.Headers[headerSplit[0]] = value
 				} else {
 					position = body
 					continue
 				}
 			}
 
+			// request body
 			if position == body {
 				if row != "" {
 					if test.Body == "" {
@@ -87,6 +125,17 @@ func ParseSource(bs []byte) ([]*Test, error) {
 						test.Body = fmt.Sprintf("%s\n%s", test.Body, row)
 					}
 				} else {
+					if test.Body != "" {
+						// do body templating
+						body, err := raymond.Render(test.Body, variables)
+
+						if err != nil {
+							return nil, err
+						}
+
+						test.Body = body
+					}
+
 					tests = append(tests, test)
 					test = &Test{
 						Headers: make(map[string]string),
@@ -98,14 +147,27 @@ func ParseSource(bs []byte) ([]*Test, error) {
 	}
 
 	if test.Name != "" {
+		if test.Body != "" {
+			// do body templating
+			body, err := raymond.Render(test.Body, variables)
+
+			if err != nil {
+				return nil, err
+			}
+
+			test.Body = body
+		}
+
 		tests = append(tests, test)
 	}
 
-	return tests, nil
+	result.Tests = tests
+
+	return result, nil
 }
 
 // ParseFacit parses a facit file (.result) returning any responses found or an error
-func ParseFacit(bs []byte) ([]*Response, error) {
+func ParseFacit(bs []byte, result *ParseResult) (*ParseResult, error) {
 	rows := toRows(bs)
 
 	position := resName
@@ -115,8 +177,20 @@ func ParseFacit(bs []byte) ([]*Response, error) {
 	}
 
 	for _, row := range rows {
+		// divider and naming
 		if strings.HasPrefix(row, "#") {
 			if position == resBody {
+				if response.Body != "" {
+					// do body templating
+					body, err := raymond.Render(response.Body, result.Variables)
+
+					if err != nil {
+						return nil, err
+					}
+
+					response.Body = body
+				}
+
 				responses = append(responses, response)
 				response = &Response{
 					Headers: make(map[string]string),
@@ -131,7 +205,19 @@ func ParseFacit(bs []byte) ([]*Response, error) {
 			}
 		}
 
+		// request body
 		if !strings.HasPrefix(row, "#") {
+			// variables
+			if strings.HasPrefix(row, "@") {
+				v := strings.SplitN(row, "=", 2)
+				key := strings.TrimSpace(v[0][1:])
+				value := strings.TrimSpace(v[1])
+
+				result.Variables[key] = value
+				continue
+			}
+
+			// status line
 			if position == status {
 				s, err := strconv.Atoi(row)
 
@@ -144,16 +230,26 @@ func ParseFacit(bs []byte) ([]*Response, error) {
 				continue
 			}
 
+			// response headers
 			if position == resHeaders {
 				if row != "" {
 					headerSplit := strings.SplitN(row, ":", 2)
-					response.Headers[headerSplit[0]] = strings.TrimSpace(headerSplit[1])
+
+					// do header templating
+					value, err := raymond.Render(strings.TrimSpace(headerSplit[1]), result.Variables)
+
+					if err != nil {
+						return nil, err
+					}
+
+					response.Headers[headerSplit[0]] = value
 				} else {
 					position = resBody
 					continue
 				}
 			}
 
+			// response body
 			if position == resBody {
 				if row != "" {
 					if response.Body == "" {
@@ -162,6 +258,17 @@ func ParseFacit(bs []byte) ([]*Response, error) {
 						response.Body = fmt.Sprintf("%s\n%s", response.Body, row)
 					}
 				} else {
+					if response.Body != "" {
+						// do body templating
+						body, err := raymond.Render(response.Body, result.Variables)
+
+						if err != nil {
+							return nil, err
+						}
+
+						response.Body = body
+					}
+
 					responses = append(responses, response)
 					response = &Response{
 						Headers: make(map[string]string),
@@ -173,10 +280,23 @@ func ParseFacit(bs []byte) ([]*Response, error) {
 	}
 
 	if response.Name != "" {
+		if response.Body != "" {
+			// do body templating
+			body, err := raymond.Render(response.Body, result.Variables)
+
+			if err != nil {
+				return nil, err
+			}
+
+			response.Body = body
+		}
+
 		responses = append(responses, response)
 	}
 
-	return responses, nil
+	result.Facit = responses
+
+	return result, nil
 }
 
 // splits bs into rows and returns them as strings
