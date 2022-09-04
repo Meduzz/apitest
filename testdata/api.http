@@ -1,0 +1,22 @@
+@baseUrl = http://localhost:3000/greeter
+
+# @name greet
+@name = "not greet"
+POST {{baseUrl}}/greet HTTP/1.1
+Content-Type: application/json
+
+{
+    "message":"{{name}}"
+}
+
+###
+
+@greeting = {{greet.response.message}}
+
+# @name reverse
+POST {{baseUrl}}/reverse
+Content-Type: application/json
+
+{
+    "content": "{{greeting}}"
+}
