@@ -2,14 +2,17 @@ package commands
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/Meduzz/helper/http/client"
 	"meduzz.github.com/apitest/parser"
 
+	"github.com/oliveagle/jsonpath"
 	"github.com/spf13/cobra"
 )
 
@@ -53,6 +56,8 @@ func handleTest(cmd *cobra.Command, args []string) error {
 	actual := make([]*parser.Response, 0)
 
 	for _, test := range result.Tests {
+		runtimeTestTemplating(test, result.Variables)
+
 		switch test.Method {
 		case post:
 			res, err := doPost(test)
@@ -60,6 +65,38 @@ func handleTest(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				return err
 			}
+
+			result.Variables[test.Name] = createRequestVariables(test, res)
+
+			actual = append(actual, res)
+		case delete:
+			res, err := doDelete(test)
+
+			if err != nil {
+				return err
+			}
+
+			result.Variables[test.Name] = createRequestVariables(test, res)
+
+			actual = append(actual, res)
+		case put:
+			res, err := doPut(test)
+
+			if err != nil {
+				return err
+			}
+
+			result.Variables[test.Name] = createRequestVariables(test, res)
+
+			actual = append(actual, res)
+		case get:
+			res, err := doGet(test)
+
+			if err != nil {
+				return err
+			}
+
+			result.Variables[test.Name] = createRequestVariables(test, res)
 
 			actual = append(actual, res)
 		}
@@ -175,6 +212,46 @@ func address(test *parser.Test) error {
 	return nil
 }
 
+func doGet(test *parser.Test) (*parser.Response, error) {
+	err := address(test)
+
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := client.GET(test.Path)
+
+	if err != nil {
+		return nil, err
+	}
+
+	req = setHeaders(req, test.Headers)
+
+	res, err := req.DoDefault()
+
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := res.AsText()
+
+	if err != nil {
+		return nil, err
+	}
+
+	response := &parser.Response{}
+	response.Name = test.Name
+	response.Status = res.Code()
+	response.Headers = make(map[string]string)
+	response.Body = body
+
+	for k, v := range res.Response().Header {
+		response.Headers[k] = flatternHeader(v)
+	}
+
+	return response, nil
+}
+
 func doPost(test *parser.Test) (*parser.Response, error) {
 	err := address(test)
 
@@ -183,6 +260,96 @@ func doPost(test *parser.Test) (*parser.Response, error) {
 	}
 
 	req, err := client.POSTBytes(test.Path, []byte(test.Body), "application/json")
+
+	if err != nil {
+		return nil, err
+	}
+
+	req = setHeaders(req, test.Headers)
+
+	res, err := req.DoDefault()
+
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := res.AsText()
+
+	if err != nil {
+		return nil, err
+	}
+
+	response := &parser.Response{}
+	response.Name = test.Name
+	response.Status = res.Code()
+	response.Headers = make(map[string]string)
+	response.Body = body
+
+	for k, v := range res.Response().Header {
+		response.Headers[k] = flatternHeader(v)
+	}
+
+	return response, nil
+}
+
+func doDelete(test *parser.Test) (*parser.Response, error) {
+	err := address(test)
+
+	if err != nil {
+		return nil, err
+	}
+
+	var req *client.HttpRequest
+
+	if test.Body != "" {
+		req, err = client.DELETEBytes(test.Path, []byte(test.Body), "application/json")
+
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		req, err = client.DELETE(test.Path, nil)
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	req = setHeaders(req, test.Headers)
+
+	res, err := req.DoDefault()
+
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := res.AsText()
+
+	if err != nil {
+		return nil, err
+	}
+
+	response := &parser.Response{}
+	response.Name = test.Name
+	response.Status = res.Code()
+	response.Headers = make(map[string]string)
+	response.Body = body
+
+	for k, v := range res.Response().Header {
+		response.Headers[k] = flatternHeader(v)
+	}
+
+	return response, nil
+}
+
+func doPut(test *parser.Test) (*parser.Response, error) {
+	err := address(test)
+
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := client.PUTBytes(test.Path, []byte(test.Body), "application/json")
 
 	if err != nil {
 		return nil, err
@@ -280,4 +447,155 @@ func printDiffs(diff []*result) {
 	for _, d := range diff {
 		fmt.Printf("%s expected %v but was %v\n", d.Field, d.Expected, d.Actual)
 	}
+}
+
+func runtimeTestTemplating(test *parser.Test, variables map[string]interface{}) {
+	rx := regexp.MustCompile("{{[a-z.@?$]+}}")
+
+	for k, v := range test.Headers {
+		if strings.Contains(v, "{{") {
+			matches := rx.FindAllString(v, -1)
+
+			for _, i := range matches {
+				if strings.Contains(i, "$") {
+					_, exists := variables[i]
+
+					if exists {
+						// the variable is already set and will be templated
+						continue
+					}
+
+					executeJsonpath(i, variables)
+					it, exists := variables[i[2:len(i)-2]]
+
+					if exists {
+						v = strings.ReplaceAll(v, i, it.(string))
+					}
+				}
+			}
+
+			test.Headers[k] = v
+		}
+	}
+
+	if strings.Contains(test.Body, "{{") {
+		matches := rx.FindAllString(test.Body, -1)
+
+		for _, i := range matches {
+			if strings.Contains(i, "$") {
+				it, exists := variables[i]
+
+				if exists {
+					// the variable is already set and will be templated
+					test.Body = strings.ReplaceAll(test.Body, i, it.(string))
+					continue
+				}
+
+				executeJsonpath(i, variables)
+				it, exists = variables[i[2:len(i)-2]]
+
+				if exists {
+					test.Body = strings.ReplaceAll(test.Body, i, it.(string))
+				}
+			}
+		}
+	}
+
+	for k, v := range variables {
+		value, ok := v.(string)
+
+		if !ok {
+			continue
+		}
+
+		if strings.Contains(value, "{{") {
+			matches := rx.FindAllString(value, -1)
+
+			for _, i := range matches {
+				if strings.Contains(i, "$") {
+					_, exists := variables[i[2:len(i)-2]]
+
+					if exists {
+						// the variable is already set and will be templated
+						continue
+					}
+
+					executeJsonpath(i, variables)
+					it, exists := variables[i[2:len(i)-2]]
+
+					if exists {
+						value = strings.ReplaceAll(value, i, it.(string))
+					}
+				}
+			}
+
+			variables[k] = value
+		}
+	}
+}
+
+func dig(data map[string]interface{}, keys []string) interface{} {
+	value, ok := data[keys[0]]
+
+	if !ok {
+		return nil
+	}
+
+	if len(keys) == 1 {
+		return value
+	}
+
+	workish, ok := value.(map[string]interface{})
+
+	if !ok {
+		return nil
+	}
+
+	return dig(workish, keys[1:])
+}
+
+func executeJsonpath(match string, variables map[string]interface{}) {
+	idx := strings.Index(match, "$")
+	key := match[2 : idx-1]
+	path := match[idx : len(match)-2]
+
+	keys := strings.Split(key, ".")
+	_, ok := variables[keys[0]]
+
+	if !ok {
+		// the test has not been ran yet
+		return
+	}
+
+	value := dig(variables, keys)
+
+	if value != nil {
+		var obj interface{}
+		json.Unmarshal([]byte(value.(string)), &obj)
+		data, err := jsonpath.JsonPathLookup(obj, path)
+
+		if err != nil {
+			fmt.Printf("jsonpath threw error: %v\n", err)
+			return
+		}
+
+		// TODO improve handling of data types
+		variables[match[2:len(match)-2]] = data.(string)
+	}
+}
+
+func createRequestVariables(test *parser.Test, res *parser.Response) map[string]interface{} {
+	request := make(map[string]interface{})
+	request["headers"] = test.Headers
+	request["body"] = test.Body
+
+	response := make(map[string]interface{})
+	response["headers"] = res.Headers
+	response["body"] = res.Body
+
+	both := make(map[string]interface{})
+	both["request"] = request
+	both["response"] = response
+
+	return both
 }

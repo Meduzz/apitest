@@ -1,0 +1,11 @@
+# @name greet
+200
+Content-Type: application/json
+
+{
+    "message":"Hello {{name}}!"
+}
+
+# @name reverse
+200
+Content-Type: application/json

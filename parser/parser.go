@@ -2,11 +2,14 @@ package parser
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/aymerick/raymond"
+	"github.com/oliveagle/jsonpath"
 )
 
 const (
@@ -60,8 +63,20 @@ func ParseSource(bs []byte) (*ParseResult, error) {
 				position = name
 			}
 
+			if strings.TrimSpace(row) == "###" {
+				// dividier
+				continue
+			}
+
 			if position == name {
-				test.Name = strings.SplitN(row, " ", 2)[1]
+				if idx := strings.Index(row, "@name"); idx > 0 {
+					// named request
+					idx += len("@name")
+					test.Name = strings.TrimSpace(row[idx:])
+				} else {
+					// normal request
+					test.Name = strings.SplitN(row, " ", 2)[1]
+				}
 				position++
 				continue
 			}
@@ -198,8 +213,19 @@ func ParseFacit(bs []byte, result *ParseResult) (*ParseResult, error) {
 				position = resName
 			}
 
+			if strings.TrimSpace(row) == "###" {
+				// dividier
+				continue
+			}
+
 			if position == resName {
-				response.Name = strings.SplitN(row, " ", 2)[1]
+				if idx := strings.Index(row, "@name"); idx > 0 {
+					// named request
+					response.Name = strings.TrimSpace(row[idx:])
+				} else {
+					// normal request
+					response.Name = strings.SplitN(row, " ", 2)[1]
+				}
 				position++
 				continue
 			}
@@ -236,7 +262,8 @@ func ParseFacit(bs []byte, result *ParseResult) (*ParseResult, error) {
 					headerSplit := strings.SplitN(row, ":", 2)
 
 					// do header templating
-					value, err := raymond.Render(strings.TrimSpace(headerSplit[1]), result.Variables)
+					value := runtimeResponseTemplating(strings.TrimSpace(headerSplit[1]), result.Variables)
+					value, err := raymond.Render(value, result.Variables)
 
 					if err != nil {
 						return nil, err
@@ -260,7 +287,8 @@ func ParseFacit(bs []byte, result *ParseResult) (*ParseResult, error) {
 				} else {
 					if response.Body != "" {
 						// do body templating
-						body, err := raymond.Render(response.Body, result.Variables)
+						body := runtimeResponseTemplating(response.Body, result.Variables)
+						body, err := raymond.Render(body, result.Variables)
 
 						if err != nil {
 							return nil, err
@@ -310,4 +338,83 @@ func toRows(bs []byte) []string {
 	}
 
 	return ret
+}
+
+func dig(data map[string]interface{}, keys []string) interface{} {
+	value, ok := data[keys[0]]
+
+	if !ok {
+		return nil
+	}
+
+	if len(keys) == 1 {
+		return value
+	}
+
+	workish, ok := value.(map[string]interface{})
+
+	if !ok {
+		return nil
+	}
+
+	return dig(workish, keys[1:])
+}
+
+func executeJsonpath(match string, variables map[string]interface{}) {
+	idx := strings.Index(match, "$")
+	key := match[2 : idx-1]
+	path := match[idx : len(match)-2]
+
+	keys := strings.Split(key, ".")
+	_, ok := variables[keys[0]]
+
+	if !ok {
+		// the test has not been ran yet
+		return
+	}
+
+	value := dig(variables, keys)
+
+	if value != nil {
+		var obj interface{}
+		json.Unmarshal([]byte(value.(string)), &obj)
+		data, err := jsonpath.JsonPathLookup(obj, path)
+
+		if err != nil {
+			fmt.Printf("jsonpath threw error: %v\n", err)
+			return
+		}
+
+		// TODO better clean up the data
+		variables[match[2:len(match)-2]] = data.(string)
+	}
+}
+
+func runtimeResponseTemplating(data string, variables map[string]interface{}) string {
+	rx := regexp.MustCompile("{{[a-z.@?$]+}}")
+
+	if strings.Contains(data, "{{") {
+		matches := rx.FindAllString(data, -1)
+
+		for _, i := range matches {
+			if strings.Contains(i, "$") {
+				it, exists := variables[i[2:len(i)-2]]
+
+				if exists {
+					// the variable is already set and will be templated
+					data = strings.ReplaceAll(data, i, it.(string))
+					continue
+				}
+
+				executeJsonpath(i, variables)
+				it, exists = variables[i[2:len(i)-2]]
+
+				if exists {
+					data = strings.ReplaceAll(data, i, it.(string))
+				}
+			}
+		}
+	}
+
+	return data
 }

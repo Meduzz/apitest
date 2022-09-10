@@ -8,17 +8,17 @@ type (
 	}
 
 	Test struct {
-		Name    string
-		Method  string
-		Path    string
-		Headers map[string]string
-		Body    string
+		Name    string            `json:"-"`
+		Method  string            `json:"method"`
+		Path    string            `json:"path"`
+		Headers map[string]string `json:"headers"`
+		Body    string            `json:"body"`
 	}
 
 	Response struct {
-		Name    string
-		Status  int
-		Headers map[string]string
-		Body    string
+		Name    string            `json:"-"`
+		Status  int               `json:"-"`
+		Headers map[string]string `json:"headers"`
+		Body    string            `json:"body"`
 	}
 )
